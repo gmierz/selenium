@@ -264,6 +264,8 @@ class Options extends Capabilities {
   constructor(other) {
     super(other);
     this.setBrowserName(Browser.FIREFOX);
+
+    this.android_ = {};
   }
 
   /**
@@ -400,6 +402,71 @@ class Options extends Capabilities {
     }
     throw TypeError('binary must be a string path or Channel object');
   }
+
+  /**
+   * Sets the name of the activity hosting an Android GeckoView. This
+   * option must be set to connect to an [Android
+   * GeckoView](https://mozilla.github.io/geckoview/) via
+   * [geckodriver](https://firefox-source-docs.mozilla.org/testing/geckodriver/geckodriver/).
+   *
+   * @param {string} name The activity name.
+   * @return {!Options} A self reference.
+   */
+  androidActivity(name) {
+    this.android_.androidActivity = name;
+    return this;
+  }
+
+  /**
+   * Sets the device serial number to connect to via ADB. If not specified,
+   * geckodriver will select an unused device at random. An error will be
+   * returned if all devices already have active sessions.
+   *
+   * @param {string} serial The device serial number to connect to.
+   * @return {!Options} A self reference.
+   */
+  androidDeviceSerial(serial) {
+    this.android_.androidDeviceSerial = serial;
+    return this;
+  }
+
+  /**
+   * Configures geckodriver to launch Firefox on Android via adb. This
+   * function is shorthand for
+   * {@link #androidPackage options.androidPackage('org.mozilla.firefox')}.
+   * @return {!Options} A self reference.
+   */
+  androidFirefox() {
+    return this
+      .androidPackage('org.mozilla.firefox')
+      .androidActivity('.App');
+  }
+
+  /**
+   * Sets the package name of the Firefox or GeckoView app.
+   *
+   * @param {?string} pkg The package to connect to, or `null` to disable Android
+   *     and switch back to using desktop Firefox.
+   * @return {!Options} A self reference.
+   */
+  androidPackage(pkg) {
+    this.android_.androidPackage = pkg;
+    return this;
+  }
+
+  /**
+   * Specify additional command line arguments that should be used
+   * when starting the Android intent.  See
+   * https://developer.android.com/studio/command-line/adb#IntentSpec.
+   *
+   * @param {...(string|!Array<string>)} args The arguments to include.
+   * @return {!Options} A self reference.
+   */
+  androidAddIntentArguments(...args) {
+    this.android_.androidIntentArguments = (this.android_.androidIntentArguments || []).concat(...args);
+    return this;
+  }
+
 }
 
 
@@ -547,6 +614,41 @@ class ServiceBuilder extends remote.DriverService.Builder {
 }
 
 
+
+/** @type {remote.DriverService} */
+let defaultService = null;
+
+
+/**
+ * Sets the default service to use for new GeckoDriver instances.
+ * @param {!remote.DriverService} service The service to use.
+ * @throws {Error} If the default service is currently running.
+ */
+function setDefaultService(service) {
+  if (defaultService && defaultService.isRunning()) {
+    throw Error(
+        'The previously configured GeckoDriver service is still running. ' +
+        'You must shut it down before you may adjust its configuration.');
+  }
+  defaultService = service;
+}
+
+
+/**
+ * Returns the default GeckoDriver service. If such a service has not been
+ * configured, one will be constructed using the default configuration for
+ * a GeckoDriver executable found on the system PATH.
+ * @return {!remote.DriverService} The default GeckoDriver service.
+ */
+function getDefaultService() {
+  if (!defaultService) {
+    defaultService = new ServiceBuilder().build();
+  }
+  return defaultService;
+}
+
+
+
 /**
  * A WebDriver client for Firefox.
  */
@@ -557,11 +659,13 @@ class Driver extends webdriver.WebDriver {
    * @param {(Options|Capabilities|Object)=} opt_config The
    *    configuration options for this driver, specified as either an
    *    {@link Options} or {@link Capabilities}, or as a raw hash object.
-   * @param {(http.Executor|remote.DriverService)=} opt_executor Either a
+   * @param {(remote.DriverService|http.Executor)=} opt_serviceExecutor Either a
    *   pre-configured command executor to use for communicating with an
-   *   externally managed remote end (which is assumed to already be running),
-   *   or the `DriverService` to use to start the geckodriver in a child
-   *   process.
+   *   externally managed remote end (which is assumed to already be 
+   *   running), or the `DriverService` to use to start the
+   *   geckodriver in a child process.  If neither is provided, the
+   *   {@linkplain ##getDefaultService default service} will be used
+   *   by default.
    *
    *   If an executor is provided, care should e taken not to use reuse it with
    *   other clients as its internal command mappings will be updated to support
@@ -573,7 +677,7 @@ class Driver extends webdriver.WebDriver {
    *     configured to use the legacy FirefoxDriver from the Selenium project.
    * @return {!Driver} A new driver instance.
    */
-  static createSession(opt_config, opt_executor) {
+  static createSession(opt_config, opt_serviceExecutor) {
     let caps =
         opt_config instanceof Capabilities
             ? opt_config : new Options(opt_config);
@@ -581,14 +685,11 @@ class Driver extends webdriver.WebDriver {
     let executor;
     let onQuit;
 
-    if (opt_executor instanceof http.Executor) {
-      executor = opt_executor;
+    if (opt_serviceExecutor instanceof http.Executor) {
+      executor = opt_serviceExecutor;
       configureExecutor(executor);
-    } else if (opt_executor instanceof remote.DriverService) {
-      executor = createExecutor(opt_executor.start());
-      onQuit = () => opt_executor.kill();
     } else {
-      let service = new ServiceBuilder().build();
+      let service = opt_serviceExecutor || getDefaultService();
       executor = createExecutor(service.start());
       onQuit = () => service.kill();
     }
@@ -787,3 +888,5 @@ exports.Driver = Driver;
 exports.Options = Options;
 exports.ServiceBuilder = ServiceBuilder;
 exports.locateSynchronously = locateSynchronously;
+exports.getDefaultService = getDefaultService;
+exports.setDefaultService = setDefaultService;
